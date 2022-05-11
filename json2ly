@@ -1,0 +1,720 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+# ########################################################################### #
+# JSON2LY
+#
+# Convertidor de archivos JSON de la plataforma songsterr a Lilypond
+#
+# Authors:
+# * Can Bacab Hector Arturo
+# * Colli Peraza Rodrigo
+#
+# UpdatedAt: 17.03.2019
+# ########################################################################### #
+
+import sys
+import json
+import math	# Para logaritmo base 2
+
+# Un diccionario que, dada una fracción, devuelve la duración de la nota en formato Lilypond
+noteDuration = {
+    #Duración		Símbolo	
+    "1.5"		:	"1.",	# Redonda con puntillo
+    "1.0"		:	"1",	# Redonda
+    "0.75"		:	"2.",	# Blanca con puntillo
+    "0.5"		:	"2",	# Blanca
+    "0.375"		:	"4.",	# Negra con puntillo
+    "0.25"		:	"4",	# Negra
+    "0.1875"		:	"8.",	# Corchea con puntillo
+    "0.125"		:	"8",	# Corchea
+    "0.09375"		:	"16.",	# Semicorchea con puntillo
+    "0.0625"		:	"16",	# Semicorchea
+    "0.046875"		:	"32.",	# Fusa con puntillo
+    "0.03125"		:	"32",	# Fusa
+    "0.0234375"		:	"64.",	# Semifusa con puntillo
+    "0.015625"		:	"64",	# Semifusa
+    "0.01171875"	:	"128.",	# Garrapatea con puntillo
+    "0.0078125"		:	"128",	# Garrapatea
+    "0.005859375"	:	"256.",	# Semigarrapatea con puntillo
+    "0.00390625"	:	"256",	# Semigarrapatea
+    # Tresillos
+    "0.666666666667"	:	"1",	# Redonda en tresillo
+    "0.3333333333333"	:	"2",	# Blanca en tresillo
+    "0.166666666667"	:	"4",	# Negra en tresillo
+    "0.0833333333333"	:	"8",	# Corchea en tresillo
+    "0.0416666666667"	:	"16",	# Semicorchea en tresillo
+    "0.0208333333333"	:	"32",	# Fusa en tresillo
+    "0.0104166666667"	:	"64",	# Semifusa en tresillo
+    "0.0052083333"	:	"128",	# Garrapatea en tresillo
+    "0.0026041667"	:	"256",	# Semigarrapatea en tresillo
+    # Extrañas
+#    "0.625"		:	"4"	# NOTA: En realidad debe equivaler a 5/8 partes
+    "0.044270833"	:	"384"	# NOTA: Aparece en "La Campanella" de Lizt/Paganini
+
+}
+
+# Las notas MIDI, comenzando en el Do más bajo del piano (nota 21)
+notes = [
+        'a,,,',		'ais,,,',	'b,,,',
+        'c,,',		'cis,,',	'd,,',		'dis,,',	'e,,',		'f,,',		'fis,,',	'g,,',		'gis,,',	'a,,',		'ais,,',	'b,,',
+        'c,',		'cis,',		'd,',		'dis,',		'e,',		'f,',		'fis,',		'g,',		'gis,',		'a,',		'ais,',		'b,',
+        'c',		'cis',		'd',		'dis',		'e',		'f',		'fis',		'g',		'gis',		'a',		'ais',		'b',
+        'c\'',		'cis\'',	'd\'',		'dis\'',	'e\'',		'f\'',		'fis\'',	'g\'',		'gis\'',	'a\'',		'ais\'',	'b\'',
+        'c\'\'',	'cis\'\'',	'd\'\'',	'dis\'\'',	'e\'\'',	'f\'\'',	'fis\'\'',	'g\'\'',	'gis\'\'',	'a\'\'',	'ais\'\'',	'b\'\'',
+        'c\'\'\'',	'cis\'\'\'',	'd\'\'\'',	'dis\'\'\'',	'e\'\'\'',	'f\'\'\'',	'fis\'\'\'',	'g\'\'\'',	'gis\'\'\'',	'a\'\'\'',	'ais\'\'\'',	'b\'\'\'',
+        'c\'\'\'\'',	'cis\'\'\'\'',	'd\'\'\'\'',	'dis\'\'\'\'',	'e\'\'\'\'',	'f\'\'\'\'',	'fis\'\'\'\'',	'g\'\'\'\'',	'gis\'\'\'\'',	'a\'\'\'\'',	'ais\'\'\'\'',	'b\'\'\'\'',
+        'c\'\'\'\'\'',	'cis\'\'\'\'\'',	'd\'\'\'\'\'',	'dis\'\'\'\'\'',	'e\'\'\'\'\'',	'f\'\'\'\'\'',	'fis\'\'\'\'\'',	'g\'\'\'\'\'',	'gis\'\'\'\'\'',	'a\'\'\'\'\'',	'ais\'\'\'\'',	'b\'\'\'\'',
+]
+
+# El listado de nombres de acorde
+chordNames = []
+
+# El listado de instrumentos
+lines = []
+
+# El listado de las letras
+songLyrics = []
+
+# El número de voces (instrumentos) en la partitura
+numVoices = 1
+
+# El último compás definido
+lastSignature = []
+
+# Duración de la última nota: se usa para evitar repeticiones de duraciones consecutivas
+lastNoteType = []
+# El nombre del último acorde: se usa para pasarlo de un compás a otro
+lastChordName = []
+# Trémolo abierto
+isTrillOpen = False
+# Comentario abierto
+isTextSpanOpen = False
+# Ligadura abierta
+isTieOpen = False
+# Final alternativo abierto
+isAlternateEndingOpen = False
+# Tresillo abierto
+isTupletOpen = False
+# Número de elementos en el tresillo
+tupletCounter = 0
+# El traste en que está puesto el capo
+capo = 0
+
+# ########################################################################### #
+# loadJson
+# input: jsonFile as a string
+# output: a python object
+# ########################################################################### #
+def loadJson(jsonFile):
+    file = open(jsonFile, 'rb')
+    jsonStr = file.read()
+    file.close()
+    json_data = json.loads(jsonStr);
+    return json_data
+
+# ########################################################################### #
+# cleanup
+# input: object data
+# output: a list with all the info we need
+# ########################################################################### #
+def cleanup(data):
+    try:
+        meta = data['meta']
+    except KeyError:
+        meta = False
+    try:
+        part = data['part']
+    except KeyError:
+        part = False
+    try:
+        lyrics = data['lyrics']
+    except KeyError:
+        lyrics = []
+        part = False
+    if part != False:
+        capo = part['capo']
+        frets = part['capo']
+        strings = part['strings']
+        measures = part['measures']
+        instrument = part['instrument']
+        numVoices = part['voices']
+    else:
+        capo = 0
+        frets = False
+        strings = False
+        measures = False
+        instrument = False
+        numVoices = 1
+    del meta
+    del part
+
+    return [capo, frets, strings, measures, lyrics, instrument, numVoices]
+
+# ########################################################################### #
+# setFretboard
+# Recibe la afinación de las cuerdas de la guitarra
+# y coloca en el diapasón las notas equivalentes
+# input: list (afinación en formato MIDI)
+# output: string (diapasón)
+# ########################################################################### #
+def setFretboard( tuning ):
+    global capo
+
+    fretboard = list()
+
+    for s in range( 0, len(tuning) ):
+        string = []
+        # NOTA: Si bien una guitarra eléctrica tiene un máximo de 24 trastes,
+        #	en la pieza "La Campanella" (para piano) aparecen números que ascienden
+        #	hasta el 27, motivo por el cuál armamos un diapasón de 40 trastes (0..39)
+        for f in range(0,40):
+            # se suma el capotraste (capo)
+            midi = tuning[s] +capo + f - 21	# El Do inferior es 21, en Python se cuenta desde 0
+            note = notes[midi]
+            string.append( note )
+        fretboard.append(string)
+    return fretboard
+
+# ########################################################################### #
+# tread2Figure
+# Convierte una pisada (tread) de guitarra en la figura de la nota equivalente
+# input: Boolean, note obj, type
+# output: a note for lilypond as a str
+# ########################################################################### #
+def tread2Figure(voice, note, type):
+    global lastNoteType
+
+    value = ''
+
+    try:
+        isRest = note['rest']
+    except KeyError:
+        isRest = False
+
+    if isRest:
+        value = 'r'
+        # Si la duración es distinta a la de la nota anterior, la agregamos
+        if type != lastNoteType[voice] :
+            value += type
+    else:
+        string = int(note['string'])
+        try:
+            fret = int(note['fret'])
+        except KeyError:
+            sys.stderr.write('% No se encontró "fret" en ' )#, note)
+            fret = False
+        part = fretboard[string][fret]
+        value = part
+        # Si la duración es distinta a la de la nota anterior, la agregamos
+        if type != lastNoteType[voice] :
+            value += type
+    lastNoteType[voice] = type
+
+    return value
+
+# ########################################################################### #
+# transportChord
+# Recibe el nombre de un acorde y el capotraste,
+# devuelve el acorde transportado
+# chord: string (el acorde)
+# capo : integer
+# output: string (en formato Lilypond)
+# ########################################################################### #
+def transportChord( chord, capo ):
+    chordNames = [c, cis, d, dis, e, f, fis, g, gis, a, ais, b]
+
+
+
+# ########################################################################### #
+# json2LyChord
+# Convierte un acorde en formato JSON a formato Lilypond
+# input: string (en formato json)
+#	 duration (la duración)
+#	 voice (la voz (instrumento a que pertenece el acorde)
+# output: string (en formato Lilypond)
+#
+# FUENTES:
+# https://www.stringkick.com/blog-lessons/chord-names-symbols/
+# http://lilypond.org/doc/v2.18/Documentation/notation/common-chord-modifiers
+# https://www.reddit.com/r/musictheory/comments/8w7zdv/slash_chords_with_relative_note_numbers/
+#
+# ########################################################################### #
+def json2LyChord( jsonChord, noteType ):
+    global capo
+
+    noteType = str(noteType)
+
+    output = jsonChord[0].lower()
+    i = 1
+    if len(jsonChord) > 1:
+        if jsonChord[i] == '#':
+            output += 'is'
+            i += 1
+        elif jsonChord[i] == 'b':
+            output += 'es'
+            i += 1
+    output += noteType
+    jsonChord = jsonChord[i:len(jsonChord)]
+    if len(jsonChord) > 0:
+        output += ':' + jsonChord.replace('#','is').replace('b','es').replace('M7','maj7').replace('add','maj').replace('Maj7','7+').lower()
+
+    return output
+
+def isGlissando(note):
+    # Comprueba si es un glissando
+    try:
+        isSlide = note['slide']
+    except KeyError:
+        isSlide = False
+    if isSlide == 'shift':
+        return '\\glissando'
+    else:
+        return ''
+
+
+
+# ########################################################################### #
+# getNotes
+# Recibe los compases (measures) y devuelve las notas que contienen
+# input: measures (lista de compases)
+# output: lista de notas
+# ########################################################################### #
+def getNotes(measures):
+    global chordNames
+    global lastChordName
+    global numVoices
+    global lines
+    global lastSignature
+    global lastNoteType
+    global isTrillOpen
+    global isTextSpanOpen
+    global isTieOpen
+    global isAlternateEndingOpen
+    global isTupletOpen
+    global tupletCounter
+
+    count = 1
+    # Lista con la duración acumulada del compás en cada voz. Se usa para verificar si no hay errores de duración
+    measureDuration = []
+    # Lista con la duración última "signatura" (compás) registrada para cada voz
+    signatureDuration = []
+
+    # Crea tantas listas como número de voces (instrumentos) haya
+    for i in range(0, numVoices):
+        lines.append( [] )
+        lastNoteType.append( [] )
+        chordNames.append( [] )
+        lastChordName.append( '' )
+        measureDuration.append( 0 )
+        lastSignature.append( [] )
+        signatureDuration.append( 1 )	# Por defecto 4/4 = 1
+
+    # Recorre los compases (measures)
+    for measure in measures:
+        voices = measure['voices']
+        # Recorre las voces (instrumentos en cada compás)
+        for v in range( 0, numVoices ):
+
+            # Inicializa la duración acumulada de cada compás
+            measureDuration[v] = 0
+
+            chordNames[v].append("% measure # " + str(count) )
+
+            # Se agrega el nuevo compás a la lista
+            lines[v].append( '% ===================')
+            lines[v].append( '% measure #' + str(count) )
+            lines[v].append( '% ===================')
+
+            # Comprueba si hay una nueva "signatura" (cambio de tempo: C, 2/4, 3/4, 6/8, etc.)
+            try:
+                signature = measure['signature']
+                lastSignature[v] = signature
+                # Cambia la duración del compás (para calcular si la duración es correcta)
+                signatureDuration[v] = signature[0] / float(signature[1])
+                lines[v].append('\\time ' + str(signature[0]) + '/' + str(signature[1]) )
+            except KeyError:
+                signature = False
+
+            # Comprueba si es el inicio de una repetición
+            try:
+                repeatStart = measure['repeatStart']
+                lines[v].append('\\repeat volta 2 {')
+            except KeyError:
+                repeatStart = False
+
+            # Comprueba si es el final de una repetición
+            try:
+                repeatEnd = measure['repeat']
+            except KeyError:
+                repeatEnd = False
+
+            # Comprueba si es un final alterno
+            try:
+                alternateEnding = measure['alternateEnding']
+                if not isAlternateEndingOpen:
+                    #Si se está abriendo un nuevo final alternativo y aún no se cierra la repetición
+                    #debe cerrarse primero
+                    if repeatEnd:
+                        lines[v].append('} %end of repeat')
+    #                lines[v].append('\\alternative {')
+                    isAlternateEndingOpen = True
+    #            lines[v].append('{ %alternative #' + str( alternateEnding[0] ) ')
+            except KeyError:
+                alternateEnding = False
+
+            try:
+                # Recorre los tiempos (beats) de cada compas
+                for beat in voices[v]['beats']:
+                    # Tipo de nota: blanca (1), negra (2), corchea (4), semicorchea (8), etc.
+                    #		NOTA: NO se puede usar para la duración. En su lugar se usa noteType
+                    type = beat['type']
+
+                    # Comprueba si es el inicio de un grupillo (tuplet)
+                    try:
+                        tupletStart = beat['tupletStart']
+                        #NOTA: Temporal. No sabemos si son tresillos (3) y si reemplazan a 2 notas (2) o ḿas de dos
+                        lines[v].append('\\tuplet 3/2')
+                        lines[v].append('{ %tuplet')
+                        chordNames[v].append('\\tuplet 3/2')
+                        chordNames[v].append('{ %tuplet')
+                        isTupletOpen = True
+                    except KeyError:
+                        tupletStart = False
+
+                    try:
+                        textSpan = beat['text']
+                        #NOTA: Provisional. Deberíamos interpretar el campo "width"
+                        lines[v].append('\\override TextSpanner.bound-details.left.text = "' + textSpan['text'] + '"')
+                    except KeyError:
+                        textSpan = False
+
+                    try:
+                        harmonic = beat['harmonic']
+                    except KeyError:
+                        harmonic = False
+
+                    try:
+                        tempo = beat['tempo']
+                    except KeyError:
+                        tempo = False
+
+                    try:
+                        laissezVibrer = beat['letRing']
+                    except KeyError:
+                        laissezVibrer = False
+
+                    try:
+                        isDotted = beat['dotted']
+                    except KeyError:
+                        isDotted = False
+
+                    # Comprueba si debe imprimir el nombre del acorde
+                    try:
+                        chord = beat['chord']
+                    except KeyError:
+                        chord = False
+
+                    # Comprueba si es un trémolo, trino o trill (llamado "vibrato") en JSON
+                    try:
+                        isTrill = beat['vibrato']
+                    except KeyError:
+                        isTrill = False
+
+                    if tempo:
+                        ttype = str( tempo['type'] )
+                        tbpm = str( tempo['bpm'] )
+                        lines[v].append('\\tempo ' + ttype + ' = ' + tbpm)
+
+                    # Obtiene las notas de cada tiempo
+                    
+                    notes = beat['notes']
+
+                    # Obtiene la duración (real) de las notas en cada tiempo
+                    try:
+                        duration = beat['duration']
+                        durationNum = duration[0]
+                        durationDen = duration[1]
+                        # Calcula la duración de la nota como un número de punto flotante
+                        floatDuration = durationNum / float(durationDen)
+                        # Acumula la duración de la nota actual a todo el compás
+                        measureDuration[v] += floatDuration
+                        # Calcula el tipo de la nota como un número real
+                        floatType = 1/float(type)
+                        if isDotted:
+                            floatType *= 1.5
+                        # Revisa en el diccionario noteDuration qué tipo se corresponde con la duración
+                        # NOTA: 96 y 384 son excepciones que aparecieron en "La Campanella"
+                        if type == 48:
+                            noteType = '32*2/3'
+                        elif type == 96:
+                            noteType = '64*2/3'
+                        elif type == 384:
+                            noteType = '256*2/3'
+                        elif isTupletOpen == True or floatType == floatDuration:
+                            noteType = str( type )
+                            if isDotted:
+                                noteType += '.'
+                        else:
+                            noteType = str(type) + '*' + str( durationNum * type ) + '/' + str(durationDen)
+                    except KeyError:
+                        if type != False:
+                            floatDuration = 1 / floatType
+                            measureDuration[v] += floatDuration
+                            # NOTA: Una excepción que apareció en "La Campanella": duración de 96
+                            if type == 48:
+                                noteType = '32*2/3'
+                            elif type == 96:
+                                noteType = '64*2/3'
+                            elif type == 384:
+                                noteType = '256*2/3'
+                            elif isTupletOpen == True or floatType == floatDuration:
+                                noteType = str( type )
+                                if isDotted:
+                                    noteType += '.'
+                            else:
+                                noteType = str(type) + '*' + str( durationNum * type ) + '/' + str(durationDen)
+                        else:
+                            duration = False
+                            lines[v].append("% ERROR: nota sin duración")
+                            sys.stderr.write('Sin duración')
+                    # Si hay un nuevo nombre de acorde
+                    if chord:
+                        chordNames[v].append( json2LyChord(chord['text'], noteType ) + " % Original: " + chord['text'])
+                    else:
+                        #NOTA IMPORTANTE: Se usa "s" en vez de "r" para los silencios
+                        #	porque así no aparece el símbolo N.C. (No Chord)
+                        chordNames[v].append( 's' + noteType)
+                    # Si son varias, forma un acorde
+                    if len(notes) > 1:
+                        lines[v].append('<')
+                        for note in notes:
+                            lines[v].append(tread2Figure(v, note, ''))
+                        value = '>'
+                        if noteType != lastNoteType[v]:
+                             value += str(noteType)
+                        lines[v].append(value)
+                        lines[v].append( isGlissando(note) )
+                    else:
+                        note = notes[0]
+                        lines[v].append(tread2Figure(v, note, noteType))
+                        lines[v].append( isGlissando(note) )
+                        try:
+                            isTie = note['hp']
+                            if not isTieOpen:
+                                lines[v].append('(')
+                                isTieOpen = True
+                        except KeyError:
+                            isTie = False
+                        try:
+                            isBend = note['bend']
+                        except KeyError:
+                            isBend = False
+                        if isTieOpen and not isTie:
+                            lines[v].append(')');
+                            isTieOpen = False;
+                        if isBend:
+                            lines[v].append( '\\bendAfter #+4' )	#NOTA: Provisional
+
+
+                    # Si es un trémolo, lo abre
+                    if isTrill:
+                        lines[v].append('\\startTrillSpan')
+                        isTrillOpen = True
+
+                    # Si es un trémolo, lo cierra
+                    if isTrillOpen and not isTrill:
+                        lines[v].append('\\stopTrillSpan')
+                        isTrillOpen = False
+
+                    if laissezVibrer:
+                        lines[v].append('\\laissezVibrer')
+
+                    if isTextSpanOpen:
+                        lines[v].append('\\stopTextSpan')
+                        isTextSpanOpen = False
+
+                    if textSpan:
+                        lines[v].append('\\startTextSpan')
+                        isTextSpanOpen = True
+
+                    # Comprueba si es el final de un grupillo (tuplet)
+                    try:
+                        tupletStop = beat['tupletStop']
+                        lines[v].append('} %tuplet')
+                        chordNames[v].append('} %tuplet')
+                        isTupletOpen = False
+                    except KeyError:
+                        isTupletStop = False
+
+                # Si estamos adentro de algún final alternativo
+        #        if isAlternateEndingOpen:
+        #            if alternateEnding:
+        #                lines[v].append('} %end of alternative #' + str(alternateEnding[0]) )
+        #            if not alternateEnding:
+        #                lines[v].append('} %end of alternate')
+        #                isAlternateEndingOpen = False
+
+                # Si es el final de una repetición, y no se ha iniciado algún final alternativo
+                # debe cerrarse la repetición (al final del compás)
+                if repeatEnd and not alternateEnding:
+                    lines[v].append('} %end of repeat')
+                # Si la duración acumulada de las notas del compás superan la duración de su "signatura":
+                if measureDuration[v] != signatureDuration[v]:
+                    lines[v].append("% ERROR: en la duración del compás: " + "{:.15f}".format(measureDuration[v]) + ' de ' + "{:.15f}".format(signatureDuration[v]) ) 
+                    chordNames[v].append("% ERROR: en la duración del compás: " + "{:.15f}".format(measureDuration[v]) + ' de ' + "{:.15f}".format(signatureDuration[v]) )
+            except:
+                beat = False
+
+        count += 1
+
+# ########################################################################### #
+# getLyrics
+# Recibe la letra (lyrics) de la canción
+# input: lyrics (lista de compases con letra)
+# output: lista de notas
+# ########################################################################### #
+def getLyrics(lyrics):
+    global songLyrics
+
+    # Recorre los compases (measures)
+    for l in lyrics:
+        b = l['beats']
+
+# ########################################################################### #
+# printLilypondPartiture
+# Envía a la salida estándar una partitura compatible con Lilypond
+# ########################################################################### #
+
+def printLilypondPartiture(title, artist, signature, lyrics, instrument, player_tempo):
+    global numVoices
+
+    print(u'\\version "2.18.2"')
+    print(u'\\header {\n\ttitle = "'+ title.encode('utf-8') + u'"\n\tsubtitle = "Transcripcion para Dueto de Plectros"\n\tcomposer = "' + artist.encode('utf-8') + u'"\n\tarranger = "arr. Jose Enrique Alvarez"\n}')
+    print(u'global = {\n\t\\key c \\major\n\t\\time ' + str(signature[0]) + '/' + str(signature[1]) +'\n}')
+
+    for l in range( 0, numVoices ):
+
+
+        # Imprimimos la(s) armonía(s) de guitarra
+        print( 'harmonies' + chr(65+l) + '= \\transpose c c \\chords { ' )
+        print('\\set chordChanges = ##t')
+        for line in chordNames[l]:
+            print( line )
+        print('}')
+
+
+        # Imprimimos la(s) tablatura(s)
+        print(u'bandurria' + chr(65+l) + ' = \\absolute {\n\t\\global')
+
+        # En automático, transponemos la pieza 1 octava por encima, para
+        # que resulte más fácil interpretarla en bandurria o laúd,
+        # y para que el arreglista pueda cambiar la transposición con facilidad.
+        print('\t\\transpose c c\' {')
+
+        for line in lines[l]:
+            print(line)
+#            print( u' '.join(line).encode('utf-8') )
+
+        print('} %transpose')
+        print('}')
+        
+        # Imprimimos la letra de la canción
+#        print('\\addlyrics {')
+#        print(lyrics[l])
+#        print('}')
+
+    print('\\score {')
+    print('\\new StaffGroup <<')
+    for l in range( 0, numVoices ):
+        print('\t\\new ChordNames {')
+        print('\t\t\\harmonies' + chr(65+l) )
+        print('\t}')
+
+        print('\t\\new TabStaff \with {')
+        print('\t\tstringTunings = #bandurria-tuning')
+        print('\tinstrumentName = "Bandurria' + chr(65+l) + '"')
+        print('\t}')
+        print('{')
+        print('\t\\tabFullNotation')
+        print('\t\\stemUp')
+        print('\t\\time ' + str(signature[0]) + '/' + str(signature[1]))
+        print('\t\\bandurria' + chr(65+l) )
+        print('}')
+
+        print('%{')
+        print('\t\\new Staff \\with {')
+        print('\tmidiInstrument = "acoustic guitar (steel)"')
+        print('\tinstrumentName = "Bandurria' + chr(65+l) + '"')
+        print('\t\\global')
+        print('\t} \\bandurria' + chr(65+l))
+        print('%}')
+    print('>>')
+    print('\\layout {')
+    print(' \t#(layout-set-staff-size 25)')
+    print('}')
+
+    print('\\midi {')
+    print('\t\\tempo 4=90')	#NOTA: Creo que está mal
+    print('\t}')
+    print('}')
+
+def checkArgs(args):
+    countArgs = len(args)
+    if countArgs < 2:
+        print('Uso: json2ly file.json')
+        return False
+    return True
+
+
+# -------------------------------------------- #
+# Main
+# -------------------------------------------- #
+
+arguments = sys.argv
+
+if checkArgs(arguments):
+    json_data = loadJson(arguments[1])
+
+    # Obtiene la afinación de la guitarra del archivo JSON,
+    # que puede estar en 3 secciones distintas.
+    try:
+        tuning = json_data['tuning']
+    except KeyError:
+        try:
+            tuning = json_data['track']['tuning']
+        except KeyError:
+            try:
+                tuning = json_data['data']['part']['tuning']
+            except KeyError:
+                print('Error: afinación no encontrada')
+                sys.exit(1)
+
+    data = json_data['data']
+
+    capo, frets, strings, measures, lyrics, instrument, numVoices = cleanup(data)
+
+    # Pone las notas en el diapasón, a partir de la afinación
+    # de la guitarra que aparece en el archivo JSON
+    fretboard = setFretboard( tuning )
+
+    player_tempo = json_data['player']['tempo']
+    try:
+        artist = json_data['meta']['artist']
+        title  = json_data['meta']['title']
+    except KeyError:
+        # Algunos JSON (como bach_partita3.json ) no tienen sección 'meta' independiente.
+        # Entonces sacamos los datos de la sección 'meta' en 'data'
+        artist = json_data['data']['meta']['artist']
+        title = json_data['data']['meta']['title']
+
+    signature = measures[0]['signature']
+#    lastSignature = signature
+
+    del json_data
+    del data
+
+#    notes = getNotes(measures)
+    getNotes(measures)
+#    getLyrics(lyrics)
+    printLilypondPartiture(title, artist, signature, lyrics, instrument, player_tempo)
